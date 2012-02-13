@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8"/>
+	<meta name="latexinput" content="mmd-article-header"/>
+	<title>MultiMarkdown Footer Test</title>
+	<meta name="latexinput" content="mmd-article-begin-doc"/>
+	<meta name="latexfooter" content="mmd-memoir-footer"/>
+</head>
+<body>
+<p>Here is some text containing a footnote.<a href="#fn:1" id="fnref:1" title="see footnote" class="footnote">[1]</a></p>
+
+<blockquote>
+<p>And here is a footnote within a blockquote, should be labelled #2.<a href="#fn:2" id="fnref:2" title="see footnote" class="footnote">[2]</a></p>
+</blockquote>
+
+<p>And this is a codeblock, that should not be a footnote:</p>
+
+<pre><code>This is code.[^somesamplefootnote]
+</code></pre>
+
+<p>And this is a short footnote for testing.<a href="#fn:3" id="fnref:3" title="see footnote" class="footnote">[3]</a></p>
+
+<p>And now, reuse a footnote.<a href="#fn:3" title="see footnote" class="footnote">[3]</a></p>
+
+<div class="footnotes">
+<hr />
+<ol>
+
+<li id="fn:1">
+<p>Here is the text of the footnote itself. It also has a <a href="http://somelink.com">link</a>. <a href="#fnref:1" title="return to article" class="reversefootnote">&#160;&#8617;</a></p>
+</li>
+
+<li id="fn:2">
+<p>Note # 2. <a href="#fnref:2" title="return to article" class="reversefootnote">&#160;&#8617;</a></p>
+</li>
+
+<li id="fn:3">
+<p>Finis <a href="#fnref:3" title="return to article" class="reversefootnote">&#160;&#8617;</a></p>
+</li>
+
+</ol>
+</div>
+
+</body>
+</html>
