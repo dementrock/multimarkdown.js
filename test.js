@@ -1,6 +1,4 @@
-const test = require('test'),
-      asserts = test.asserts,
-      fs = require( "fs" ),
+const fs = require( "fs" ),
       markdown = require( "./multimarkdown" );
 
 // get the list of all test collections
