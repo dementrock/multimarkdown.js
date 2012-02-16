@@ -1676,8 +1676,7 @@ sub _TokenizeHTML {
 
 
 sub _Outdent {
-#
-# Remove one level of line-leading tabs or spaces
+""# Remove one level of line-leading tabs or spaces
 #
 	my $text = shift;
 
