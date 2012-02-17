@@ -191,16 +191,21 @@ this.makeHtml = function(text) {
     // attacklab: Restore tildes
     text = text.replace(/~T/g,"~");
 
-    // TODO
-//    if (lc($g_document_format) =~ /^complete\s*$/i) {
-//      return xhtmlMetaData() . "<body>\n\n" . $text . "\n</body>\n</html>";
-//  } elsif (lc($g_document_format) =~ /^snippet\s*$/i) {
-//      return $text . "\n";
-//  } else {
-//      return $g_document_format . textMetaData() . $text . "\n";
-//  }
+    var r_complete = new XRegExp('^complete\\s*$', 'i');
+    var r_snippet = new XRegExp('^snippet\\s*$', 'i');
 
-    return text;
+    if (r_complete.test(g_document_format.toLowerCase())) {
+        return xhtmlMetaData() + "<body>\n\n" + text + "\n</body>\n</html>";
+    } else if (r_snippet.test(g_document_format.toLowerCase())) {
+        return text + "\n";
+    } else {
+        return g_document_format + textMetaData() + text + "\n";
+    }
+
+}
+
+var textMetaData = function() { // TODO
+    return '';
 }
 
 
@@ -310,39 +315,326 @@ var id2footnote = function(id) {
     return footnote;
 }
 
-var _GenerateImageCrossRefs = function() { // TODO
+var _GenerateImageCrossRefs = function(text) { // TODO
+    // First, handle reference-style labeled images: ![alt text][id]
+    var r_labeled_image = new XRegExp(
+        "(" +               // wrap whole match in $1
+          "!\\[" +
+            "(.*?)" +       // alt text = $2
+          "\\]" + 
 
+          "[ ]?" +              // one optional space
+          "(?:\n[ ]*)?" +       // one optional newline followed by spaces
+
+          "\\[" +
+            "(.*?)" +       // id = $3
+          "\\]" +
+
+        ")", "xsg");
+            
+    text = text.replace(r_labeled_image, function($0, $1, $2, $3) {
+        var result;
+        var whole_match = $1;
+        var alt_text = $2;
+        var link_id = $3.toLowerCase();
+        if (link_id == "") {
+            link_id = alt_text.toLowerCase();
+        }
+        alt_text = alt_text.replace(/"/g, '&quot;');
+        if (link_id in g_urls) {
+            var label = Header2Label(alt_text);
+            g_crossrefs[label] = "#" + label;
+        } else {
+            // If there's no such link ID, leave intact:
+            result = whole_match;
+        }
+        return whole_match;
+    });
+    // Next, handle inline images:  ![alt text](url "optional title")
+    // Don't forget: encode * and _
+    var r_inline_images = new XRegExp(
+        "("                + // wrap whole match in $1
+          "!\\["           +
+            "(.*?)"        + // alt text = $2
+          "\\]"            +
+          "\\("            + // literal paren
+            "[ \\t]*"      +
+            "<?(\\S+?)>?"  + // src url = $3
+            "[ \\t]*"      +
+            "("            + // $4
+              "(['\"])"    + // quote char = $5 '
+              "(.*?)"      + // title = $6
+              "\\5"        + // matching quote
+              "[ \\t]*"    +
+            ")?"           + // title is optional
+          "\\)"            +
+        ")", "xsg");
+    text = text.replace(r_inline_images, function($0, $1, $2) {
+        var result;
+        var whole_match = $1;
+        var alt_text = $2;
+        alt_text = alt_text.replace(/"/g, '&quot;');
+        var label = Header2Label(alt_text);
+        g_crossrefs[label] = "#" + label;
+        return whole_match;
+    });
+    return text;  
+}
+
+var Header2Label = function(header) {
+    var header = header;
+    var label = header.toLowerCase();
+    label = label.replace(/[^A-Za-z0-9:_.-]/g, ''); // Strip illegal characters
+    label = label.replace(/^[^A-Za-z]+/g, ''); // Strip illegal leading characters // TODO check if this is correct
+    return label;
 }
 
 var _StripMarkdownReferences = function(text) { // TODO
+    var less_than_tab = g_tab_width - 1;
+    var r_ref = new XRegExp(
+        "\\n\\[\\#(.+?)\\]:[ \\t]*"  +             // id = $1
+        "\\n?"                   +
+        "(.*?)\\n{1,2}"          +             // end at new paragraph
+        "((?=\\n[ ]{0," + less_than_tab + "}\\S)|\\Z)"  // Lookahead for non-space at line-start, or end of doc
+        , "sx");
+    while (r_ref.test(text)) {
+        text = text.replace(r_ref, function($0, $1, $2) {
+            var id = $1;
+            var reference = $2 + '\n';
+            reference = reference.replace(new RegExp('^[ ]{0,' + g_tab_width + '}', 'gm'), '');
+            reference = _RunBlockGamut(reference);
+
+            // strip leading and trailing <p> tags (they will be added later)
+            reference = reference.replace(new XRegExp("^\\<p\\>", "s"), '');
+            reference = reference.replace(new XRegExp("^\\<\\/p\\>\\s*$", "s"), '');
+            
+            g_references[id] = reference;
+            return '\n';
+        });
+    }
     return text;
 }
 
 var _DoMarkdownCitations = function(text) { // TODO
+    var r_without_locator = new XRegExp( // Allow for citations without locator to be written
+        "\\[\\#([^\\[]*?)\\]" +     // in usual manner, e.g. [#author][] rather than
+        "[ ]?" +                // [][#author]
+        "(?:\\n[ ]*)?" +
+        "\\[\\s*\\]"
+        , "xsg");
+    text = text.replace(r_without_locator, function($0, $1) {
+        return "[][#" + $1 + "]";
+    });
+
+    var r_citation = new XRegExp(
+        "\\[([^\\[]*?)\\]" +  // citation text = $1
+        "[ ]?" +              // one optional space
+        "(?:\\n[ ]*)?" +      // one optional newline followed by spaces
+        "\\[\\//(.*?)\\]"   // id = $2
+        , "xsg");
+
+    text = text.replace(r_citation, function($0, $1, $2) {
+        var result;
+        var anchor_text = $1;
+        var id = $2;
+        var count = undefined;
+
+        // implement equivalent to \citet
+        
+        var r_textual = new XRegExp("^(.*?);\\s*", "");
+        var textual_string = "";
+        if (r_textual.test(anchor_text)) {
+            anchor_text = anchor_text.replace(r_textual, function($0, $1) {
+                textual_string = "<span class=\"textual citation\">" + $1 + "</span>";
+            });
+        }
+
+
+        if (id in g_references) {
+            var citation_counter = 0;
+            
+            // See if citation has been used before
+            for (var old_id_index in g_used_references) {
+                var old_id = g_used_references[old_id_index];
+                citation_counter++;
+                if (old_id == id) {
+                    count = citation_counter;
+                }
+            }
+
+            if (count == undefined) {
+                g_citation_counter++;
+                count = g_citation_counter;
+                g_used_references.push(id);
+            }
+
+            result = "<span class=\"markdowncitation\">" + textual_string + " (<a href=\"#" + id + "\" title=\"see citation\">" + count + "</a>";
+
+            if (anchor_text != "") {
+                result += ", <span class=\"locator\">" + anchor_text + "</span>";
+            }
+            
+            result += ")</span>";
+        } else {
+            // No reference exists
+            result = "<span class=\"externalcitation\">" + textual_string + " (<a id=\"" + id + "\">" + id + "</a>";
+            
+            if (anchor_text != "") {
+                result += ", <span class=\"locator\">" + anchor_text + "</span>";
+            }
+            
+            result += ")</span>";
+        }
+        
+        if (Header2Label(anchor_text) == "notcited") {
+            result = "<span class=\"notcited\" id=\"" + id + "\"/>";
+        }
+        return result;
+    });
+
     return text;
 }
 
-var _DoFootnotes = function(text) { // TODO
+var _DoFootnotes = function(text) { 
+    // First, run routines that get skipped in footnotes
+    for (var label in sortKeys(g_footnotes)) {
+        var footnote = _RunBlockGamut(g_footnotes[label]);
+
+        footnote = _DoMarkDownCitations(footnote);
+        g_footnotes[label] = footnote;
+    }
+    
+    text = text.replace(/\[\^(.+?)\]/, function($0, $1) { // id = $1
+        var result = "";
+        var id = id2footnote($1);
+        if (id in g_footnotes) {
+            g_footnote_counter++;
+            var r_glossary = new XRegExp("^(<p>)?glossary:", "i");
+            if (r_glossary.test(g_footnotes[id])) {
+                result = "<a href=\"#fn:" + id + "\" id=\"fnref:" + id + "\" title=\"see glossary\" class=\"footnote glossary\">" + g_footnote_counter + "</a>";
+            } else {
+                result = "<a href=\"#fn:" + id + "\" id=\"fnref:" + id + "\" title=\"see footnote\" class=\"footnote\">" + g_footnote_counter + "</a>";
+            }
+            g_used_footnotes.push(id);
+        }
+        return result;
+    });
+
     return text;
 }
 
-var _UnescapeComments = function(text) { // TODO
+function sortKeys(arr){
+    // Setup Arrays
+    var sortedKeys = new Array();
+    var sortedObj = {};
+
+    // Separate keys and sort them
+    for (var i in arr){
+        sortedKeys.push(i);
+    }
+    sortedKeys.sort();
+
+    // Reconstruct sorted obj based on keys
+    for (var i in sortedKeys){
+        sortedObj[sortedKeys[i]] = arr[sortedKeys[i]];
+    }
+    return sortedObj;
+}
+
+var _UnescapeComments = function(text) {
+    // Remove encoding inside comments
+    // Based on proposal by Toras Doran (author of Text::MultiMarkdown)
+
+    var r_comments = new XRegExp('<!--(.*?)(?=-->)', 'xsg');
+    text = text.replace(r_comments, function($0, $1) {
+        var t = $1;
+        t = t.replace(/&amp;/g, '&');
+        t = t.replace(/&lt;/g, '<');
+        return t;
+    });
     return text;
 }
 
-var _FixFootnoteParagraphs = function(text) { // TODO
+var _FixFootnoteParagraphs = function(text) {
+    text = text.replace(/^\<p\>\<\/footnote\>/gm, '<\/footnote>');
     return text;
 }
 
-var _PrintFootnotes = function() { // TODO
-    return '';
+var _PrintFootnotes = function() {
+    var footnote_counter = 0;
+    var result = "";
+    
+    var r_glossary = new XRegExp('^(<p>)?glossary:\\s*', 'i');
+    var r_format = new XRegExp(
+        "^(.*?)" +               // $1 = term
+        "\\s*" + 
+        "(?:\\(([^\\(\\)]*)\\)[^\\n]*)?" +       // $2 = optional sort key
+        "\\n", "gsx");
+
+    for (var id in g_used_footnotes) {
+        footnote_counter++;
+        var footnote = g_footnotes[id];
+        var footnote_closing_tag = "";
+
+        footnote = footnote.replace(/(\<\/(p(re)?|ol|ul)\>)$/, function($0, $1) {
+            footnote_closing_tag = $1;
+            return '';
+        });
+
+        if (r_glossary.test(footnote)) {
+            // Add some formatting for glossary entries
+
+            footnote = footnote.replace(r_format, function($0, $1, $2) {
+
+                var glossary = "<span class=\"glossary name\">" + $1 + "</span>";
+
+                if ($2) {
+                    glossary += "<span class=\"glossary sort\" style=\"display:none\">" + $2 + "</span>";
+                }
+                
+                glossary += ":<p>"; 
+            });
+
+            result += "<li id=\"fn:" + id + "\">" + footnote + "<a href=\"#fnref:" + id + "\" title=\"return to article\" class=\"reversefootnote\">&#160;&#8617;</a>" + footnote_closing_tag + "</li>\n\n";
+        } else {
+            result += "<li id=\"fn:" + id + "\">" + footnote + "<a href=\"#fnref:" + id + "\" title=\"return to article\" class=\"reversefootnote\">&#160;&#8617;</a>" + footnote_closing_tag + "</li>\n\n";
+        }
+    }
+
+    result += "</ol>\n</div>";
+
+    if (footnote_counter > 0) {
+        result = "\n\n<div class=\"footnotes\">\n<hr" + g_empty_element_suffix + "\n<ol>\n\n" + result;
+    } else {
+        result = "";
+    }   
+    
+    result = _UnescapeSpecialChars(result);
+    return result;
 }
 
-var _PrintMarkdownBibliography = function() { // TODO
-    return '';
+var _PrintMarkdownBibliography = function() {
+    var citation_counter = 0;
+    var result = "";
+    
+    for (var id in g_used_references) {
+        citation_counter++;
+        result += "<div id=\"" + id + "\"><p>[" + citation_counter + "] <span class=\"item\">" + g_references[id] + "</span></p></div>\n\n";
+    }
+    result += "</div>";
+
+    if (citation_counter > 0) {
+        result = "\n\n<div class=\"bibliography\">\n<hr" + g_empty_element_suffix + "\n<p>" + g_bibliography_title + "</p>\n\n" + result;
+    } else {
+        result = "";
+    }   
+    
+    return result;
 }
 
-var _ConvertCopyright = function(text) { // TODO
+var _ConvertCopyright = function(text) {
+    text = text.replace(new XRegExp('&copy;', 'gi'), '&#xA9;');
+
     return text;
 }
 
@@ -354,7 +646,8 @@ var _StripLinkDefinitions = function(text) {
     
     var less_than_tab = g_tab_width - 1;
 
-    var r_link = new XRegExp( // TODO this yields an error of invalid group
+    // Link defs are in the form: ^[id]: url "optional title"
+    var r_link = new XRegExp(
             // Pattern altered for Multimarkdown
             // in order to not match citations or footnotes
             "^[ ]{0," + less_than_tab + "}\\[([#].*)\\]:" + // id = $1
@@ -381,46 +674,21 @@ var _StripLinkDefinitions = function(text) {
             "(?:\\n+|\\Z)"
         , "mx");
 
-
-    // Link defs are in the form: ^[id]: url "optional title"
-
-    /*
-        var text = text.replace(/
-                ^[ ]{0,3}\[(.+)\]:  // id = $1  attacklab: g_tab_width - 1
-                  [ \t]*
-                  \n?               // maybe *one* newline
-                  [ \t]*
-                <?(\S+?)>?          // url = $2
-                  [ \t]*
-                  \n?               // maybe one newline
-                  [ \t]*
-                (?:
-                  (\n*)             // any lines skipped = $3 attacklab: lookbehind removed
-                  ["(]
-                  (.+?)             // title = $4
-                  [")]
-                  [ \t]*
-                )?                  // title is optional
-                (?:\n+|$)
-              /gm,
-              function(){...});
-    */
-    var text = text.replace(/^[ ]{0,3}\[(.+)\]:[ \t]*\n?[ \t]*<?(\S+?)>?[ \t]*\n?[ \t]*(?:(\n*)["(](.+?)[")][ \t]*)?(?:\n+|\Z)/gm,
-        function (wholeMatch,m1,m2,m3,m4) {
-            m1 = m1.toLowerCase();
-            g_urls[m1] = _EncodeAmpsAndAngles(m2);  // Link IDs are case-insensitive
-            if (m3) {
-                // Oops, found blank lines, so it's not a title.
-                // Put back the parenthetical statement we stole.
-                return m3+m4;
-            } else if (m4) {
-                g_titles[m1] = m4.replace(/"/g,"&quot;");
+    while (r_link.test(text)) {
+        text = text.replace(r_link, function($0, $1, $2, $3, $4) {
+            var lc_$1 = $1.toLowerCase(); // Link IDs are case-insensitive
+            g_urls[lc_$1] = $2;
+            if ($3) {
+                g_titles[lc_$1] = $3.replace(/"/g, '&quot;');
             }
-            
-            // Completely remove the definition from the text
-            return "";
-        }
-    );
+            // MultiMarkdown addition "
+            if ($4) {
+                g_attributes[lc_$1] = $4;
+            }
+            // /addition
+            return '';
+        });
+    }
 
     return text;
 }
@@ -441,6 +709,11 @@ var _HashHTMLBlocks = function(text) {
     var block_tags_a = "p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|noscript|form|fieldset|iframe|ins|del"
     var block_tags_b = "p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|noscript|form|fieldset|iframe"
 
+    //var tag_attrs = "(?:\s+[\w.:_-]\s*=\s*(?:\".+?\"|'.+?'))*"; // TODO see if need this
+
+    //var empty_tag = "< \w+ " + tag_attrs + " \s* />";
+    //var open_tag =  "< " + block_tags + " " + tag_attrs + " \s* >";
+    //var close_tag = undefined;  // let Text::Balanced handle this
     // First, look for nested blocks, e.g.:
     //   <div>
     //     <div>
@@ -575,12 +848,20 @@ var _RunBlockGamut = function(text) {
 //
     text = _DoHeaders(text);
 
+    // Do tables first to populate the table id's for cross-refs
+    // Escape <pre><code> so we don't get greedy with tables
+
+    text = _DoTables(text); // TODO
+
+    text = _HashHTMLBlocks(text);
+
     // Do Horizontal Rules:
     var key = hashBlock("<hr />");
     text = text.replace(/^[ ]{0,2}([ ]?\*[ ]?){3,}[ \t]*$/gm,key);
     text = text.replace(/^[ ]{0,2}([ ]?\-[ ]?){3,}[ \t]*$/gm,key);
     text = text.replace(/^[ ]{0,2}([ ]?\_[ ]?){3,}[ \t]*$/gm,key);
 
+    text = _DoDefinitionLists(text); // TODO
     text = _DoLists(text);
     text = _DoCodeBlocks(text);
     text = _DoBlockQuotes(text);
@@ -595,6 +876,14 @@ var _RunBlockGamut = function(text) {
     return text;
 }
 
+var _DoTables = function(text) { // TODO
+    return text;
+}
+
+var _DoDefinitionLists = function(text) { // TODO
+    return text;
+}
+
 
 var _RunSpanGamut = function(text) {
 //
@@ -603,6 +892,7 @@ var _RunSpanGamut = function(text) {
 //
 
     text = _DoCodeSpans(text);
+    text = _DoMathSpans(text);
     text = _EscapeSpecialCharsWithinTagAttributes(text);
     text = _EncodeBackslashEscapes(text);
 
@@ -621,6 +911,10 @@ var _RunSpanGamut = function(text) {
     // Do hard breaks:
     text = text.replace(/  +\n/g," <br />\n");
 
+    return text;
+}
+
+var _DoMathSpans = function(text) {
     return text;
 }
 
@@ -643,7 +937,7 @@ var _EscapeSpecialCharsWithinTagAttributes = function(text) {
     return text;
 }
 
-var _DoAnchors = function(text) {
+var _DoAnchors = function(text) { // TODO need to rewrite
 //
 // Turn Markdown link shortcuts into XHTML <a> tags.
 //
@@ -873,7 +1167,7 @@ var writeImageTag = function(wholeMatch,m1,m2,m3,m4,m5,m6,m7) {
     //}
     
     result += " />";
-    
+     
     return result;
 }
 

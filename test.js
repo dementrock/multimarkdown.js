@@ -10,9 +10,9 @@ for (var i in fixtures) {
         var input = fs.readFileSync('fixtures/' + fixtures[i]).toString();
         var output = fs.readFileSync('fixtures/' + fixtures[i].substring(0, fixtures[i].length - 5) + '.html').toString();
         var markdownOutput = converter.makeHtml(input);
-        markdownOutput = markdownOutput.replace(/[\s\r\n]/g, '');
-        output = output.replace(/[\s\r\n]/g, '');
-        if (markdownOutput != output) {
+        stripped_markdownOutput = markdownOutput.replace(/[\s\r\n]/g, '');
+        stripped_output = output.replace(/[\s\r\n]/g, '');
+        if (stripped_markdownOutput != stripped_output) {
             console.log('mmd output:\n' + markdownOutput + '\nshould be:\n' + output);
             break;
         }
